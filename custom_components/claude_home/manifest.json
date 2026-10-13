@@ -4,10 +4,10 @@
   "codeowners": ["@dbuezas"],
   "config_flow": true,
   "dependencies": ["conversation"],
-  "documentation": "https://github.com/dbuezas/claude-home",
+  "documentation": "https://github.com/turnos-dev/claude-home",
   "integration_type": "service",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/dbuezas/claude-home/issues",
+  "issue_tracker": "https://github.com/turnos-dev/claude-home/issues",
   "requirements": [],
   "version": "0.1.0"
 }

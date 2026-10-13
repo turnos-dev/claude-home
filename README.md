@@ -1,5 +1,8 @@
 # Claude Home
 
+Temporary Pi SDK fork of [dbuezas/claude-home](https://github.com/dbuezas/claude-home).
+Claude Code remains the default; see [Other LLMs through Pi SDK](#other-llms-through-pi-sdk).
+
 Claude Code, logged in with **your Claude subscription**, running as a Home Assistant add-on:
 
 - **Assist conversation agent** – talk to it from the HA app, dashboards or voice satellites. Follow-ups like "and the bedroom too" keep context until the conversation has been idle for 15 min (configurable).
@@ -21,12 +24,12 @@ Requires HA OS or Supervised (it's an add-on) and HA 2025.8+.
 - Settings → Devices & services → Add integration → **Model Context Protocol Server**. Claude controls the house through it.
 - Settings → Voice assistants → Expose: the entities Claude may control without unlocking a level.
 
-**1. Add-on** – [![Add the add-on repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fdbuezas%2Fclaude-home)
-(or Settings → Add-ons → Add-on Store → ⋮ → Repositories → add `https://github.com/dbuezas/claude-home`) → install **Claude Home** (builds locally, a few minutes) → Start.
+**1. Add-on** – [![Add the add-on repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fturnos-dev%2Fclaude-home)
+(or Settings → Add-ons → Add-on Store → ⋮ → Repositories → add `https://github.com/turnos-dev/claude-home`) → install **Claude Home** (builds locally, a few minutes) → Start.
 
 **2. Log in** – open **Claude** in the sidebar → Settings → Claude account → **Log in to Claude**. Open the link, sign in with your Claude subscription, paste the code back. One login covers everything, including continuing in the Claude app.
 
-**3. Integration** – [![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=dbuezas&repository=claude-home&category=integration)
+**3. Integration** – [![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=turnos-dev&repository=claude-home&category=integration)
 (or HACS → ⋮ → Custom repositories → same URL, type *Integration*) → download → restart HA.
 HA then shows **Claude Home discovered** under Settings → Devices & services → Configure. (Manual setup: host = *Hostname* on the add-on's Info page, port 8099, token from the add-on log.)
 
@@ -116,4 +119,48 @@ All of these are also on the Settings page.
 
 ```sh
 pip install -r requirements_test.txt && pytest
+```
+
+## Other LLMs through Pi SDK
+
+Claude models continue to use **Claude Code**, including its existing subscription
+login, fast mode and Claude app handover. Other models use a separate **Pi SDK**
+backend with the same Assist endpoint, home snapshots, MCP tools, unlock phrases,
+protected devices, instructions, conversation memory, effort and timeout settings.
+
+In the sidebar's Settings:
+1. Select **Other providers (Pi SDK)**, choose a provider/model, and **Save**.
+2. In **Pi provider account**, log in with a supported subscription, open the
+   provider link and complete authorization (paste the code/callback URL when
+   requested). Alternatively, save a provider API key there.
+3. Use your existing Assist agent as usual. Switching backend/provider/model
+   starts a fresh conversation and resets its unlocked access level.
+
+Pi's subscription integrations include **OpenAI Codex (ChatGPT Plus/Pro)** and
+**GitHub Copilot**. Only providers exposing non-Claude models appear. Availability
+and permitted subscription use depend on provider terms and account limits.
+OAuth tokens refresh automatically. API keys and OAuth credentials are stored
+server-side in `/data/pi/auth.json` with owner-only permissions, separate from
+Claude Code login, and are never returned by the settings API.
+
+`llm_backend` defaults to `claude`; for Pi use `pi`, `pi_provider` (for example
+`openai-codex`) and `pi_model` (an exact ID from the sidebar model catalog).
+Existing Claude configuration is retained when switching back.
+
+Pi needs no warm CLI processes; **Speed** settings apply only to Claude Code.
+Pi only has the add-on's gateway MCP tools at the current access level: it has no
+shell or direct filesystem tools, even at level 2+. Claude app handover is not
+available for Pi sessions. Both backends appear in Conversations; Pi histories
+are stored under `/data/pi`. Like Claude Code, active conversation mappings are
+in memory; after an add-on restart, the next voice conversation starts fresh.
+Failed or timed-out Pi turns are not saved or automatically replayed (a tool may
+already have acted). The model catalog is bundled with the pinned Pi SDK version. Bedrock and Vertex
+cloud-identity authentication are not exposed by this initial settings UI.
+
+Backend tests (no credentials required):
+
+```sh
+cd claude_home/server
+npm ci
+npm test
 ```

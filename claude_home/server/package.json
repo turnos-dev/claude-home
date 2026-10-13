@@ -4,8 +4,16 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@mariozechner/pi-agent-core": "0.73.1",
+    "@mariozechner/pi-ai": "0.73.1",
     "@modelcontextprotocol/sdk": "^1.31.0",
     "ws": "^8.18.0",
     "zod": "^4.0.0"
+  },
+  "overrides": {
+    "basic-ftp": "^6.2.3"
+  },
+  "scripts": {
+    "test": "node --test *.test.mjs"
   }
 }

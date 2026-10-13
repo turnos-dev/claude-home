@@ -36,7 +36,7 @@
   th { color: var(--muted); font-weight: 500; font-size: 13px; }
   .table-wrap { overflow-x: auto; }
   label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
-  input[type=text], input[type=number], input[type=search], select, textarea {
+  input[type=text], input[type=password], input[type=number], input[type=search], select, textarea {
     width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--input); color: var(--text); font: inherit;
   }
   select {
@@ -76,7 +76,7 @@
   </section>
 
   <section id="settings">
-    <div class="card">
+    <div class="card" id="claudeaccount">
       <h2>Claude account</h2>
       <div class="hint" style="margin:0 0 10px">Either log in once with your Claude subscription, or use an Anthropic API key (better when several people share the house: API use is billed per token and is meant for automation). With a key set, voice and chat use the key; the subscription login is then only needed for "Continue in the Claude app".</div>
       <div id="keystate" style="margin-bottom:10px"></div>
@@ -98,9 +98,26 @@
       <div class="hint" style="margin:0 0 10px">At level 2 ("unlock full access"), say "continue this in the app". The conversation then moves to the Claude app and claude.ai/code, with its full history and the same level. It keeps running, also across days, until you stop it here, ask Claude to stop it, or restart the add-on.</div>
       <div id="rcbody">Loading…</div>
     </div>
+    <div class="card" id="piaccount">
+      <h2>Pi provider account</h2>
+      <div id="pistate">Save a Pi provider in Settings to connect it.</div>
+      <div id="piauthlink"></div>
+      <input type="text" id="picode" placeholder="Authorization code or callback URL" autocomplete="off"><button type="button" class="primary" id="pisubmit">Submit code</button>
+      <p><button type="button" class="primary" id="pilogin">Log in with subscription</button> <button type="button" id="pilogout" class="secondary">Log out / remove key</button></p>
+      <label for="pikey">Provider API key (alternative to login)</label><input type="password" id="pikey" autocomplete="new-password">
+      <button type="button" class="primary" id="pisavekey">Save API key</button>
+      <div class="hint">Pi reuses the same home tools and access levels. Claude app handover, shell and filesystem tools are unavailable. Subscription access depends on provider terms and limits.</div>
+    </div>
     <form class="card" id="settingsform">
       <h2>Settings</h2>
-      <label for="main_model">Model</label>
+      <label for="llm_backend">LLM backend</label>
+      <select id="llm_backend"><option value="claude">Claude Code (subscription or API key)</option><option value="pi">Other providers (Pi SDK)</option></select>
+      <div id="pisettings">
+        <label for="pi_provider">Provider</label><select id="pi_provider"></select>
+        <label for="pi_model">Model</label><select id="pi_model"></select>
+        <div class="hint">Save your provider/model before logging in below. Claude models stay on Claude Code.</div>
+      </div>
+      <label for="main_model">Claude Code model</label>
       <select id="main_model" class="model"></select>
       <label for="effort">Effort (lower is faster)</label>
       <select id="effort"><option value="default">Model default</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select>
@@ -110,7 +127,7 @@
       </div>
       <label for="extra_instructions">Extra instructions</label>
       <textarea id="extra_instructions" placeholder="E.g. &quot;the den&quot; means the office. Ask before turning off the heating."></textarea>
-      <h2 style="margin-top:18px">Speed</h2>
+      <h2 style="margin-top:18px">Speed (Claude Code only)</h2>
       <label for="fast_mode">Mode</label>
       <select id="fast_mode"><option value="true">Fast: keep Claude running between messages</option><option value="false">Normal: start Claude for each message</option></select>
       <div class="grid">
@@ -191,10 +208,10 @@ loaders.status = async () => {
   try {
     const s = await api("api/status");
     $("#stats").innerHTML = [
-      ["Claude account", s.account.apiKey ? `<span class="ok">Using API key</span>${s.account.loggedIn ? " · subscription login also present" : ""}` : s.account.loggedIn ? `<span class="ok">Logged in</span>${s.account.email ? ` · ${esc(s.account.email)}` : ""}` : `<span class="bad">Not logged in</span> · Settings → Claude account`],
+      [s.models.backend === "pi" ? `Pi account (${s.account.provider})` : "Claude account", s.account.apiKey ? `<span class="ok">Using API key</span>${s.account.loggedIn ? " · subscription login also present" : ""}` : s.account.loggedIn ? `<span class="ok">Logged in</span>${s.account.email ? ` · ${esc(s.account.email)}` : ""}` : `<span class="bad">Not logged in</span> · Settings → ${s.models.backend === "pi" ? "Pi provider account" : "Claude account"}`],
       ["Home Assistant tools", s.mcp.ok ? `<span class="ok">Connected</span> · ${s.mcp.tools.length} tools` : `<span class="bad">Not reachable</span>`],
       ["Model", `${esc(s.models.main)} · effort ${esc(s.models.effort)}`],
-      ["Speed", s.fast.on ? `Fast · ${s.fast.running}/${s.fast.max} running${s.fast.spare ? " (1 spare)" : ""}` : "Normal"],
+      ["Speed", s.models.backend === "pi" ? "Pi SDK (no CLI process)" : s.fast.on ? `Fast · ${s.fast.running}/${s.fast.max} running${s.fast.spare ? " (1 spare)" : ""}` : "Normal"],
       ["Open conversations", s.sessions],
       ["Claude Code", esc(s.claudeVersion)],
     ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
@@ -203,7 +220,45 @@ loaders.status = async () => {
 
 // ---- settings
 const PASS = ["max_level"];
-const FIELDS = ["main_model", "effort", "session_idle_minutes", "request_timeout", "extra_instructions", "fast_mode", "fast_keep", "fast_idle_minutes"];
+const FIELDS = ["llm_backend", "pi_provider", "pi_model", "main_model", "effort", "session_idle_minutes", "request_timeout", "extra_instructions", "fast_mode", "fast_keep", "fast_idle_minutes"];
+let piCatalog = [];
+function piModels(selected) {
+  const p = piCatalog.find((p) => p.id === $("#pi_provider").value);
+  $("#pi_model").innerHTML = (p?.models || []).map((m) => `<option value="${esc(m.id)}">${esc(m.name)} (${esc(m.id)})</option>`).join("");
+  if (selected && p?.models.some((m) => m.id === selected)) $("#pi_model").value = selected;
+}
+function backendVisibility() {
+  const pi = $("#llm_backend").value === "pi";
+  $("#pisettings").hidden = !pi;
+  $("#piaccount").hidden = !pi;
+  $("#claudeaccount").hidden = pi;
+  $("#main_model").disabled = pi;
+  ["fast_mode", "fast_keep", "fast_idle_minutes"].forEach((k) => $("#" + k).disabled = pi);
+}
+$("#pi_provider").onchange = () => piModels();
+$("#llm_backend").onchange = backendVisibility;
+async function loadPi() {
+  if ($("#llm_backend").value !== "pi") return;
+  try {
+    const s = await api("api/pi/account");
+    $("#pistate").textContent = `${s.provider}: ` + (s.loggedIn ? "Subscription connected" : s.apiKey ? "API key configured" : s.login?.error || "Not connected");
+    const url = s.login?.url;
+    $("#piauthlink").innerHTML = url && /^https?:\/\//.test(url) ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open provider login</a><p>${esc(s.login.instructions || "")}</p>` : "";
+    $("#picode").hidden = $("#pisubmit").hidden = !s.login?.prompt;
+    $("#picode").placeholder = s.login?.prompt || "Authorization code";
+    const saved = await api("api/options");
+    $("#pilogin").disabled = !piCatalog.find((p) => p.id === saved.pi_provider)?.oauth || !!s.login?.pending;
+    if (s.login?.pending) setTimeout(loadPi, 2000);
+  } catch (e) { $("#pistate").textContent = e.message; }
+}
+for (const [id, route, body] of [
+  ["pilogin", "login", () => ({})], ["pilogout", "logout", () => ({})],
+  ["pisubmit", "code", () => ({ code: $("#picode").value })],
+  ["pisavekey", "key", () => ({ key: $("#pikey").value })]
+]) $("#" + id).onclick = async () => {
+  try { await api("api/pi/" + route, body()); $("#picode").value = $("#pikey").value = ""; await loadPi(); }
+  catch (e) { toast(e.message); }
+};
 function fastHint() {
   const on = $("#fast_mode").value === "true", n = Number($("#fast_keep").value) || 3;
   $("#fasthint").textContent = on ? `Up to ${n} Claude${n > 1 ? "s" : ""} running: at most about ${190 + (n - 1) * 120} MB of RAM. One of them is a spare for the next new conversation.` : "Nothing stays running; each message starts Claude.";
@@ -212,6 +267,13 @@ function fastHint() {
 loaders.settings = async () => {
   try {
     const o = await api("api/options");
+    piCatalog = await api("api/pi/catalog");
+    $("#pi_provider").innerHTML = piCatalog.map((p) => `<option value="${esc(p.id)}">${esc(p.id)}</option>`).join("");
+    $("#pi_provider").value = o.pi_provider || "openai-codex";
+    piModels(o.pi_model);
+    o.llm_backend ||= "claude";
+    o.pi_provider ||= "openai-codex";
+    o.pi_model ||= $("#pi_model").value;
     for (const k of ["main_model"]) {
       const names = [...new Set(["opus", "sonnet", "haiku", o[k]].filter(Boolean))];
       $("#" + k).innerHTML = names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
@@ -225,6 +287,8 @@ loaders.settings = async () => {
     $("#max_level").value = String(o.max_level === "" || o.max_level == null ? 3 : o.max_level);
     loadRemote();
     loadKey();
+    backendVisibility();
+    loadPi();
   }
   catch (e) { toast(e.message); }
 };
@@ -331,7 +395,7 @@ loaders.conversations = async () => {
       <td class="muted">${new Date(c.updated).toLocaleString()}</td>
       <td><div class="ent-name">${esc(c.first.slice(0, 120))}</div>${c.messages > 1 ? `<div class="ent-id">… ${esc(c.last.slice(0, 120))}</div>` : ""}</td>
       <td class="muted">${c.messages}</td>
-      <td>${c.app ? (c.app.url ? `<a href="${esc(c.app.url)}" target="_blank" rel="noopener">Open in app</a>` : "starting…")
+      <td>${c.backend === "pi" ? `<div class="ent-id">${esc(c.provider)} / ${esc(c.model)}</div><span class="muted">App handover unavailable</span>${c.voice ? '<div class="ent-id">active by voice</div>' : ""}` : c.app ? (c.app.url ? `<a href="${esc(c.app.url)}" target="_blank" rel="noopener">Open in app</a>` : "starting…")
         : `<div class="row" style="flex-wrap:nowrap"><select data-level="${c.sid}" style="width:auto">${levels.map((l) => `<option value="${l}">level ${l}</option>`).join("")}</select><button type="button" class="secondary" data-continue="${c.sid}" data-name="${esc(c.first.slice(0, 50))}">Continue in app</button></div>${c.voice ? '<div class="ent-id">active by voice</div>' : ""}`}</td></tr>`).join("")
       : `<tr><td colspan="4" class="muted">No conversations yet.</td></tr>`;
     document.querySelectorAll("[data-continue]").forEach((b) => b.addEventListener("click", async () => {

@@ -18,6 +18,8 @@ import { createProxy } from "./proxy.mjs";
 import { createRemoteControl } from "./rc.mjs";
 import { homeState, renderFull, renderDiff, SNAPSHOT_RULES } from "./snapshot.mjs";
 import { createPool } from "./warm.mjs";
+import { createPi } from "./pi.mjs";
+import { dirname } from "node:path";
 
 const env = process.env;
 const cfg = {
@@ -44,6 +46,9 @@ function settings() {
   let o = {};
   try { o = JSON.parse(readFileSync(cfg.optionsFile, "utf8")); } catch {}
   return {
+    backend: o.llm_backend === "pi" ? "pi" : "claude",
+    piProvider: o.pi_provider || "openai-codex",
+    piModel: o.pi_model || "",
     mainModel: o.main_model || "opus",
     idleMs: Number(o.session_idle_minutes || 15) * 60_000,
     timeoutMs: Number(o.request_timeout || 120) * 1000,
@@ -91,6 +96,7 @@ ${s.extra}`.trim();
 
 
 // ---- sessions: external conversation id -> Claude Code session id ----------
+const pi = createPi({ dir: `${dirname(cfg.optionsFile)}/pi` });
 const sessions = new Map(); // key -> { sid, last }
 const queues = new Map(); // key -> promise chain (serialize turns per conversation)
 const known = new Map(); // key -> home state this conversation's Claude has seen (for change-only snapshots)
@@ -143,7 +149,7 @@ const pool = createPool({
 });
 function syncPool() {
   const s = settings();
-  if (!s.fast) return pool.closeAll();
+  if (!s.fast || s.backend === "pi") return pool.closeAll();
   pool.configure({ max: s.fastKeep, idleMs: s.fastIdleMs });
   pool.refill(() => ({ fp: fingerprint(settings(), 0), level: 0 }));
 }
@@ -206,8 +212,11 @@ async function startHandover({ sid, name, level }) {
 async function ask(key, text) {
   const prev = queues.get(key) || Promise.resolve();
   const job = prev.catch(() => {}).then(async () => {
+    const s = settings();
+    const identity = JSON.stringify([s.backend, s.backend === "pi" ? [s.piProvider, s.piModel] : s.mainModel]);
     const existing = sessions.get(key);
-    const fresh = !existing || Date.now() - existing.last > settings().idleMs;
+    const fresh = !existing || existing.identity !== identity || Date.now() - existing.last > s.idleMs;
+    if (fresh) admin.resetLevel(key);
     // If this message answers an unlock request with its phrase, the level goes up here.
     const prompt = await admin.beforeTurn(key, text);
 
@@ -229,10 +238,14 @@ async function ask(key, text) {
     });
     const level = admin.levelOf(key);
     const sid = fresh ? undefined : existing.sid;
-    const fast = settings().fast;
+    const fast = s.backend === "claude" && s.fast;
     if (fresh) await pool.close(key); // an expired conversation starts over
     const run = async (resumeSid) => {
       const input = inputFor(!resumeSid); // a fresh session needs the full snapshot
+      if (s.backend === "pi") {
+        const turn = admin.turnFor(key);
+        try { return await pi.run({ s, text: input, sid: resumeSid, turn, systemPrompt: systemPrompt(s, level) }); } finally { turn.release(); }
+      }
       if (fast) return runPooled(key, input, resumeSid, level);
       const turn = admin.turnFor(key);
       try { return { ...(await runClaude(input, resumeSid, turn)), grant: turn.grant }; } finally { turn.release(); }
@@ -241,7 +254,7 @@ async function ask(key, text) {
     try {
       r = await run(sid);
     } catch (e) {
-      if (!sid) throw e;
+      if (!sid || s.backend === "pi") { known.delete(key); throw e; }
       log(`resume failed for ${key}, starting fresh: ${e.message}`);
       await pool.close(key);
       r = await run(undefined);
@@ -266,9 +279,9 @@ async function ask(key, text) {
       log(`[${key}] handover: ${r.text}`);
       return r;
     }
-    sessions.set(key, { sid: r.sid, last: Date.now() });
+    sessions.set(key, { sid: r.sid, last: Date.now(), identity });
     syncPool();
-    log(`[${key}] ${settings().mainModel} L${turn.level}${fast ? " fast" : ""} ${r.ms ?? "?"}ms turns=${r.turns ?? "?"} tokens=${r.tokens ?? "?"} tools=${r.tools.join(",") || "-"} ${JSON.stringify(text).slice(0, 80)} -> ${JSON.stringify(r.text).slice(0, 80)}`);
+    log(`[${key}] ${s.backend === "pi" ? `${s.piProvider}/${s.piModel}` : s.mainModel} L${turn.level}${fast ? " fast" : ""} ${r.ms ?? "?"}ms turns=${r.turns ?? "?"} tokens=${r.tokens ?? "?"} tools=${r.tools.join(",") || "-"} ${JSON.stringify(text).slice(0, 80)} -> ${JSON.stringify(r.text).slice(0, 80)}`);
     return r;
   });
   queues.set(key, job);
@@ -326,7 +339,7 @@ http
   })
   .listen(cfg.port, () => log(`claude-home API listening on :${cfg.port}`));
 
-startUi({ cfg, settings, sessions, readJson, send, log, admin, remote, pool, syncPool, gateway, startHandover });
+startUi({ pi, cfg, settings, sessions, readJson, send, log, admin, remote, pool, syncPool, gateway, startHandover });
 
 admin.enforceProtected(true);
 

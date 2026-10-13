@@ -11,8 +11,13 @@ import { haWs, readOptions, writeOptions } from "./ha.mjs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
+import { catalog } from "./pi.mjs";
+
 const INGRESS_IP = "172.30.32.2";
 const EDITABLE = {
+  llm_backend: (v) => v === "pi" ? "pi" : "claude",
+  pi_provider: (v) => { if (!catalog().some((p) => p.id === v)) throw new Error("Unsupported provider"); return v; },
+  pi_model: (v) => String(v).trim(),
   main_model: (v) => String(v).trim() || "opus",
   effort: (v) => (["low", "medium", "high", "xhigh", "max"].includes(v) ? v : "default"),
   session_idle_minutes: (v) => Math.min(1440, Math.max(1, Math.round(Number(v) || 15))),
@@ -78,7 +83,7 @@ export function conversations(dir, limit = 50) {
     .filter((c) => c.messages > 0);
 }
 
-export function startUi({ cfg, settings, sessions, readJson, send, log, admin, remote, pool, syncPool, gateway, startHandover }) {
+export function startUi({ pi, cfg, settings, sessions, readJson, send, log, admin, remote, pool, syncPool, gateway, startHandover }) {
   const allowAny = env.UI_ALLOW_ANY === "1"; // local development only
 
   async function status() {
@@ -87,10 +92,10 @@ export function startUi({ cfg, settings, sessions, readJson, send, log, admin, r
     const s = settings();
     return {
       claudeVersion,
-      models: { main: s.mainModel, effort: s.effort || "default" },
+      models: { backend: s.backend, main: s.backend === "pi" ? `${s.piProvider}/${s.piModel}` : s.mainModel, effort: s.effort || "default" },
       sessions: sessions.size,
-      account: await remote.status().then((r) => ({ loggedIn: r.loggedIn, email: r.email, apiKey: !!s.apiKey })),
-      fast: { on: s.fast, ...pool.status() },
+      account: s.backend === "pi" ? pi.status(s.piProvider) : await remote.status().then((r) => ({ loggedIn: r.loggedIn, email: r.email, apiKey: !!s.apiKey })),
+      fast: { on: s.backend === "claude" && s.fast, ...pool.status() },
       mcp: await mcpTools(gateway),
     };
   }
@@ -112,6 +117,7 @@ export function startUi({ cfg, settings, sessions, readJson, send, log, admin, r
   async function saveOptions(changes) {
     const next = { ...readOptions(cfg.optionsFile) };
     for (const [k, clean] of Object.entries(EDITABLE)) if (k in changes) next[k] = clean(changes[k]);
+    if (next.llm_backend === "pi" && !catalog().find((p) => p.id === next.pi_provider)?.models.some((m) => m.id === next.pi_model)) throw new Error("Select a valid Pi model");
     await writeOptions(cfg.optionsFile, next);
     syncPool();
   }
@@ -135,6 +141,12 @@ export function startUi({ cfg, settings, sessions, readJson, send, log, admin, r
       syncPool();
       return { set: !!key };
     },
+    "GET /api/pi/catalog": async () => catalog(),
+    "GET /api/pi/account": async () => pi.status(settings().piProvider),
+    "POST /api/pi/key": async (req) => pi.setKey(settings().piProvider, String(((await readJson(req)) || {}).key || "").trim()),
+    "POST /api/pi/login": async () => pi.startLogin(settings().piProvider),
+    "POST /api/pi/code": async (req) => pi.code(settings().piProvider, String(((await readJson(req)) || {}).code || "")),
+    "POST /api/pi/logout": async () => { pi.cancelLogin(); return pi.setKey(settings().piProvider, ""); },
     "GET /api/entities": async () => entities(),
     "GET /api/remote": async () => remote.status(),
     "GET /api/conversations": async () => {
@@ -143,7 +155,9 @@ export function startUi({ cfg, settings, sessions, readJson, send, log, admin, r
       const dir = `${process.env.CLAUDE_HOME_DIR || process.env.HOME}/.claude/projects/${cfg.workDir.replace(/[^A-Za-z0-9]/g, "-")}`;
       return {
         maxLevel: Number.isInteger(Number(readOptions(cfg.optionsFile).max_level)) ? Number(readOptions(cfg.optionsFile).max_level) : 3,
-        list: conversations(dir).map((c) => ({ ...c, app: inApp.get(c.sid) || null, voice: voice.has(c.sid) })),
+        list: [...conversations(dir).map((c) => ({ ...c, app: inApp.get(c.sid) || null, voice: voice.has(c.sid) })),
+          ...pi.conversations().map((c) => { const said = c.userMessages.map(userText); return { ...c, userMessages: undefined, messages: said.length, first: said[0] || "", last: said.at(-1) || "", voice: voice.has(c.sid) }; })]
+          .sort((a, b) => b.updated.localeCompare(a.updated)).slice(0, 50),
       };
     },
     "POST /api/conversations/continue": async (req) => {

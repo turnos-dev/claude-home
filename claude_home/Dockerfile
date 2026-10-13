@@ -8,8 +8,8 @@ RUN apk add --no-cache nodejs npm libgcc libstdc++ ripgrep jq curl git python3 \
  && mkdir -p /secure && chmod 700 /secure
 
 WORKDIR /opt/server
-COPY server/package.json ./
-RUN npm install --omit=dev
+COPY server/package.json server/package-lock.json ./
+RUN npm ci --omit=dev
 COPY server/*.mjs server/ui.html server/ptyrun.py agent-guide.md ./
 
 COPY run.sh /run.sh

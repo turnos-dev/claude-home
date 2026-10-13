@@ -1,8 +1,8 @@
 name: Claude Home
-version: "0.17.2"
+version: "0.18.0"
 slug: claude_home
-description: Claude Code (your Claude subscription) as a Home Assistant conversation agent
-url: https://github.com/dbuezas/claude-home
+description: Claude Code subscriptions and Pi SDK providers as a Home Assistant conversation agent
+url: https://github.com/turnos-dev/claude-home
 arch:
   - amd64
   - aarch64
@@ -25,6 +25,8 @@ panel_title: Claude
 discovery:
   - claude_home
 options:
+  llm_backend: claude
+  pi_provider: openai-codex
   main_model: opus
   effort: low
   protected_entities: []
@@ -35,6 +37,9 @@ options:
   session_idle_minutes: 15
   request_timeout: 120
 schema:
+  llm_backend: list(claude|pi)
+  pi_provider: str
+  pi_model: str?
   main_model: str
   session_idle_minutes: int(1,1440)
   request_timeout: int(10,600)
