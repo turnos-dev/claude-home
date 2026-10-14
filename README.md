@@ -164,3 +164,18 @@ cd claude_home/server
 npm ci
 npm test
 ```
+
+### Pi model catalog update (0.18.1)
+
+Pi SDK now uses the maintained `@earendil-works` packages, pinned to 1.2.0.
+The OpenAI and Codex catalogs include GPT-6 Astra (`gpt-6-astra`) and
+GPT-6.1 Sol (`gpt-6.1-sol`), as documented in
+[OpenAI's model catalog](https://developers.openai.com/api/docs/models).
+Existing `/data/pi/auth.json` credentials remain compatible. Keep the same
+provider when changing models; OpenAI and Codex logins are separate credentials.
+Model availability still depends on the provider/account. The catalog is not a
+guarantee of account entitlement.
+
+After updating the app, reload the sidebar, select a new model and Save.
+For new Codex logins, the app uses device authorization: open the provider link
+and enter the displayed code there, without a localhost callback on your phone.

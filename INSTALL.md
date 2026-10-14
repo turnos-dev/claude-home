@@ -1,7 +1,7 @@
 # Install this temporary Pi fork
 
 Repository: **https://github.com/turnos-dev/claude-home**
-Add-on version: **0.18.0**. Requires **Home Assistant OS or Supervised**, HA 2025.8+.
+Add-on version: **0.18.1**. Requires **Home Assistant OS or Supervised**, HA 2025.8+.
 
 ## Fresh installation
 
@@ -22,7 +22,9 @@ Add-on version: **0.18.0**. Requires **Home Assistant OS or Supervised**, HA 202
    as Conversation agent. Keep Prefer handling commands locally enabled.
 6. In the Claude sidebar → Settings, select **Other providers (Pi SDK)**,
    choose a provider/model and Save. Then connect the **Pi provider account**
-   with its subscription login (Codex/Copilot) or an API key.
+   with its subscription login (Codex/Copilot) or an API key. The bundled
+   Pi 1.2.0 catalog includes `gpt-6-astra` and `gpt-6.1-sol`. For existing
+   ChatGPT/Codex logins, retain `openai-codex` and select the new model.
    For Claude instead, retain **Claude Code** and use **Claude account**.
 
 ## If upstream Claude Home is already installed

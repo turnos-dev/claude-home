@@ -102,6 +102,7 @@
       <h2>Pi provider account</h2>
       <div id="pistate">Save a Pi provider in Settings to connect it.</div>
       <div id="piauthlink"></div>
+      <select id="pichoice" hidden></select>
       <input type="text" id="picode" placeholder="Authorization code or callback URL" autocomplete="off"><button type="button" class="primary" id="pisubmit">Submit code</button>
       <p><button type="button" class="primary" id="pilogin">Log in with subscription</button> <button type="button" id="pilogout" class="secondary">Log out / remove key</button></p>
       <label for="pikey">Provider API key (alternative to login)</label><input type="password" id="pikey" autocomplete="new-password">
@@ -225,7 +226,8 @@ let piCatalog = [];
 function piModels(selected) {
   const p = piCatalog.find((p) => p.id === $("#pi_provider").value);
   $("#pi_model").innerHTML = (p?.models || []).map((m) => `<option value="${esc(m.id)}">${esc(m.name)} (${esc(m.id)})</option>`).join("");
-  if (selected && p?.models.some((m) => m.id === selected)) $("#pi_model").value = selected;
+  const preferred = selected || (["openai", "openai-codex"].includes(p?.id) ? "gpt-6.1-sol" : "");
+  if (preferred && p?.models.some((m) => m.id === preferred)) $("#pi_model").value = preferred;
 }
 function backendVisibility() {
   const pi = $("#llm_backend").value === "pi";
@@ -244,7 +246,15 @@ async function loadPi() {
     $("#pistate").textContent = `${s.provider}: ` + (s.loggedIn ? "Subscription connected" : s.apiKey ? "API key configured" : s.login?.error || "Not connected");
     const url = s.login?.url;
     $("#piauthlink").innerHTML = url && /^https?:\/\//.test(url) ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open provider login</a><p>${esc(s.login.instructions || "")}</p>` : "";
-    $("#picode").hidden = $("#pisubmit").hidden = !s.login?.prompt;
+    const options = s.login?.promptOptions;
+    $("#picode").hidden = !s.login?.prompt || !!options?.length;
+    $("#pichoice").hidden = !options?.length;
+    $("#pisubmit").hidden = !s.login?.prompt;
+    if (options?.length && $("#pichoice").dataset.prompt !== s.login.prompt) {
+      $("#pichoice").innerHTML = options.map((o) => `<option value="${esc(o.id)}">${esc(o.label)}</option>`).join("");
+      $("#pichoice").dataset.prompt = s.login.prompt;
+    }
+    if (!options?.length) $("#pichoice").dataset.prompt = "";
     $("#picode").placeholder = s.login?.prompt || "Authorization code";
     const saved = await api("api/options");
     $("#pilogin").disabled = !piCatalog.find((p) => p.id === saved.pi_provider)?.oauth || !!s.login?.pending;
@@ -253,7 +263,7 @@ async function loadPi() {
 }
 for (const [id, route, body] of [
   ["pilogin", "login", () => ({})], ["pilogout", "logout", () => ({})],
-  ["pisubmit", "code", () => ({ code: $("#picode").value })],
+  ["pisubmit", "code", () => ({ code: $("#pichoice").hidden ? $("#picode").value : $("#pichoice").value })],
   ["pisavekey", "key", () => ({ key: $("#pikey").value })]
 ]) $("#" + id).onclick = async () => {
   try { await api("api/pi/" + route, body()); $("#picode").value = $("#pikey").value = ""; await loadPi(); }

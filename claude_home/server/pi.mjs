@@ -1,7 +1,6 @@
 // Pi backend: only gateway MCP tools, never shell/files or the Supervisor token.
-import { Agent } from '@mariozechner/pi-agent-core';
-import { getProviders, getModels } from '@mariozechner/pi-ai';
-import { getOAuthProviders, getOAuthProvider, getOAuthApiKey } from '@mariozechner/pi-ai/oauth';
+import { Agent } from '@earendil-works/pi-agent-core';
+import { getProviders, getModels, streamSimple, getOAuthProviders, getOAuthProvider, getOAuthApiKey, loginWithProvider } from './pi-sdk.mjs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { mkdirSync, readFileSync, writeFileSync, renameSync, readdirSync } from 'node:fs';
@@ -29,7 +28,7 @@ export function createPi({ dir, AgentClass = Agent, connect = async (spec) => {
   function status(provider) {
     valid(provider);
     const auth = load(authFile)[provider];
-    return { provider, loggedIn: auth?.type === 'oauth', apiKey: auth?.type === 'api_key', login: login?.provider === provider ? { url: login.url, instructions: login.instructions, prompt: login.prompt, error: login.error, pending: login.pending } : null };
+    return { provider, loggedIn: auth?.type === 'oauth', apiKey: auth?.type === 'api_key', login: login?.provider === provider ? { url: login.url, instructions: login.instructions, prompt: login.prompt, promptOptions: login.promptOptions, error: login.error, pending: login.pending } : null };
   }
   function setKey(provider, key) {
     valid(provider);
@@ -51,34 +50,42 @@ export function createPi({ dir, AgentClass = Agent, connect = async (spec) => {
     if (!oauth) throw new Error('This provider uses an API key');
     cancelLogin();
     const state = login = { provider, pending: true, controller: new AbortController() };
-    const input = (prompt) => new Promise((resolve, reject) => { state.prompt = prompt; state.resolve = resolve; state.reject = reject; });
+    const input = (prompt) => new Promise((resolve, reject) => {
+      state.prompt = prompt.message; state.promptOptions = prompt.type === 'select' ? prompt.options : undefined; state.resolve = resolve; state.reject = reject;
+      const aborted = () => { if (state.resolve === resolve) { state.resolve = undefined; state.prompt = undefined; state.promptOptions = undefined; } reject(new Error('Login prompt cancelled')); };
+      if (prompt.signal?.aborted) return aborted();
+      prompt.signal?.addEventListener('abort', aborted, { once: true });
+    });
     state.timer = setTimeout(cancelLogin, 10 * 60_000);
-    oauth.login({ signal: state.controller.signal, onAuth: (info) => Object.assign(state, info), onPrompt: (p) => input(p.message), onManualCodeInput: () => input('Paste the authorization code or callback URL') })
+    loginWithProvider(oauth, { signal: state.controller.signal, onAuth: (info) => Object.assign(state, info), onPrompt: input, getDeviceId: () => {
+      const file = `${dir}/device.json`; const stored = load(file);
+      if (stored.id) return stored.id;
+      const id = randomUUID(); save(file, { id }); return id;
+    } })
       .then((credentials) => { if (login === state) save(authFile, { ...load(authFile), [provider]: { type: 'oauth', ...credentials } }); })
       .catch((e) => { state.error = e.message; })
-      .finally(() => { state.pending = false; state.prompt = undefined; clearTimeout(state.timer); });
+      .finally(() => { state.pending = false; state.prompt = undefined; state.promptOptions = undefined; state.resolve = undefined; clearTimeout(state.timer); });
     return status(provider);
   }
   function code(provider, value) {
     if (login?.provider !== provider || !login.resolve) throw new Error('No login waiting for input');
-    const resolve = login.resolve; login.resolve = undefined; login.prompt = undefined; resolve(value);
+    const resolve = login.resolve; login.resolve = undefined; login.prompt = undefined; login.promptOptions = undefined; resolve(value);
     return status(provider);
   }
   const credentialQueues = new Map();
-  async function readCredentials(provider, model) {
+  async function readCredentials(provider, model, signal) {
     const auth = load(authFile), entry = auth[provider];
     if (!entry) throw new Error('Pi provider is not logged in. Open Settings and log in or add an API key.');
     if (entry.type === 'api_key') return { key: entry.key, model };
-    const result = await getOAuthApiKey(provider, auth);
+    const result = await getOAuthApiKey(provider, auth, signal);
     if (!result) throw new Error('Pi provider is not logged in');
     if (JSON.stringify(load(authFile)[provider]) !== JSON.stringify(entry)) throw new Error('Provider login changed; try again');
     save(authFile, { ...load(authFile), [provider]: { type: 'oauth', ...result.newCredentials } });
-    const oauth = getOAuthProvider(provider);
-    return { key: result.apiKey, model: oauth.modifyModels?.([model], result.newCredentials)[0] || model };
+    return { key: result.apiKey, model: { ...model, ...(result.auth.baseUrl ? { baseUrl: result.auth.baseUrl } : {}), headers: { ...model.headers, ...result.auth.headers } } };
   }
-  async function credentials(provider, model) {
+  async function credentials(provider, model, signal) {
     const previous = credentialQueues.get(provider) || Promise.resolve();
-    const job = previous.catch(() => {}).then(() => readCredentials(provider, model));
+    const job = previous.catch(() => {}).then(() => readCredentials(provider, model, signal));
     credentialQueues.set(provider, job);
     try { return await job; } finally { if (credentialQueues.get(provider) === job) credentialQueues.delete(provider); }
   }
@@ -94,7 +101,7 @@ export function createPi({ dir, AgentClass = Agent, connect = async (spec) => {
       controller.signal.addEventListener('abort', () => reject(new Error('Pi request timed out')), { once: true });
     })]);
     try {
-      const credential = await bounded(credentials(s.piProvider, model));
+      const credential = await bounded(credentials(s.piProvider, model, controller.signal));
       const tools = [];
       for (const [namespace, spec] of Object.entries(turn.servers)) {
         const pending = connect(spec);
@@ -119,8 +126,8 @@ export function createPi({ dir, AgentClass = Agent, connect = async (spec) => {
       const id = /^pi:[0-9a-f-]{36}$/.test(sid || '') ? sid : `pi:${randomUUID()}`;
       const file = `${dir}/${id.slice(3)}.json`;
       const stored = sid ? load(file) : {};
-      const history = stored.provider === s.piProvider && stored.model === s.piModel ? stored.messages || [] : [];
-      agent = new AgentClass({ initialState: { model: credential.model, systemPrompt: `${systemPrompt}\nThis is a Pi session, not Claude Code. Claude app handover and shell/files tools are unavailable.`, tools, messages: history, thinkingLevel: model.reasoning ? ({ max: 'xhigh', default: 'off' }[s.effort] || s.effort || 'off') : 'off' }, getApiKey: () => credential.key, toolExecution: 'parallel' });
+      const history = stored.provider === s.piProvider && stored.model === s.piModel ? (stored.messages || []).filter((m) => m.role !== 'system') : [];
+      agent = new AgentClass({ streamFn: streamSimple, initialState: { model: credential.model, systemPrompt: `${systemPrompt}\nThis is a Pi session, not Claude Code. Claude app handover and shell/files tools are unavailable.`, tools, messages: history, thinkingLevel: model.reasoning ? ({ default: 'off' }[s.effort] || s.effort || 'off') : 'off' }, getApiKey: () => credential.key, toolExecution: 'parallel' });
       await bounded(agent.prompt(await bounded(Promise.resolve(text))));
       if (timedOut) throw new Error('Pi request timed out');
       const last = agent.state.messages.findLast((m) => m.role === 'assistant');

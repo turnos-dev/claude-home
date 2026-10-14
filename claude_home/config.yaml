@@ -1,5 +1,5 @@
 name: Claude Home
-version: "0.18.0"
+version: "0.18.1"
 slug: claude_home
 description: Claude Code subscriptions and Pi SDK providers as a Home Assistant conversation agent
 url: https://github.com/turnos-dev/claude-home
